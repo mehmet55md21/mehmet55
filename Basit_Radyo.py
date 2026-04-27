@@ -66,6 +66,10 @@ BASS_CONFIG_NET_AGENT = 16
 
 API_BASE_URL = "http://all.api.radio-browser.info/json/stations"
 CONTACT_EMAIL = "mehmet55.md1980@gmail.com"
+APP_VERSION = "6.5"
+GITHUB_REPO = "mehmet55md21/mehmet55"
+GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 
 # --- METİN NORMALLEŞTİRME (TÜRKÇE KARAKTER DUYARSIZLIĞI) ---
 def normalize_radio_name(text):
@@ -79,6 +83,26 @@ def normalize_radio_name(text):
     for k, v in charmap.items():
         text = text.replace(k, v)
     return text.strip()
+
+def parse_version(version_text):
+    version_text = (version_text or "").strip().lower().lstrip("v")
+    parts = []
+    for part in re.split(r"[.\-_\s]+", version_text):
+        if part.isdigit():
+            parts.append(int(part))
+        else:
+            match = re.match(r"(\d+)", part)
+            if match:
+                parts.append(int(match.group(1)))
+    return tuple(parts or [0])
+
+def is_newer_version(latest_version, current_version):
+    latest = parse_version(latest_version)
+    current = parse_version(current_version)
+    max_len = max(len(latest), len(current))
+    latest += (0,) * (max_len - len(latest))
+    current += (0,) * (max_len - len(current))
+    return latest > current
 
 def migrate_old_files():
     files_to_move = {
@@ -126,6 +150,7 @@ default_settings = {
     "net_timeout_seconds": "30",
     "search_source": "FMStream.org",
     "enable_logging": "True",
+    "auto_update_check": "True",
 }
 
 modified = False
@@ -598,6 +623,17 @@ class SettingsDialog(wx.Dialog):
         pnl_acc.SetSizer(sz_acc)
         self.listbook.AddPage(pnl_acc, "Erişilebilirlik")
 
+        # 5. KATEGORI: GUNCELLEMELER
+        pnl_updates = wx.Panel(self.listbook)
+        sz_updates = wx.BoxSizer(wx.VERTICAL)
+
+        self.chk_auto_update = wx.CheckBox(pnl_updates, wx.ID_ANY, "Program açılışında güncellemeleri otomatik denetle")
+        self.chk_auto_update.SetValue(config.getboolean("General", "auto_update_check", fallback=True))
+        sz_updates.Add(self.chk_auto_update, 0, wx.ALL, 10)
+
+        pnl_updates.SetSizer(sz_updates)
+        self.listbook.AddPage(pnl_updates, "Güncellemeler")
+
         main_sizer.Add(self.listbook, 1, wx.EXPAND | wx.ALL, 10)
 
         btns = wx.StdDialogButtonSizer()
@@ -629,6 +665,7 @@ class SettingsDialog(wx.Dialog):
             "net_timeout_seconds": self.spin_timeout.GetValue(),
             "search_source": self.choice_source.GetStringSelection(),
             "enable_logging": self.chk_enable_logging.GetValue(),
+            "auto_update_check": self.chk_auto_update.GetValue(),
         }
 
 class TimedRecordDialog(wx.Dialog):
@@ -2019,6 +2056,7 @@ class MainFrame(wx.Frame):
             "MANAGE_FAVORITES": wx.NewIdRef(),
             "MANAGE_RECORDINGS": wx.NewIdRef(),
             "HELP_HTML": wx.NewIdRef(),
+            "CHECK_UPDATES": wx.NewIdRef(),
         }
 
         fm = wx.Menu()
@@ -2052,6 +2090,7 @@ class MainFrame(wx.Frame):
         hm.Append(self.menu_ids["ABOUT"], "Hakkında\tF1")
         hm.Append(self.menu_ids["SHORTCUTS"], "Klavye Kısayolları\tShift+F1")
         hm.Append(self.menu_ids["HELP_HTML"], "Yardım (HTML)\tCtrl+Shift+F1")
+        hm.Append(self.menu_ids["CHECK_UPDATES"], "Güncellemeleri Kontrol Et")
         hm.AppendSeparator()
         hm.Append(self.menu_ids["CONTACT"], "İletişim\tCtrl+I")
 
@@ -2111,6 +2150,8 @@ class MainFrame(wx.Frame):
 
         self.Show()
         wx.CallAfter(self.play_last_station_on_startup)
+        if config.getboolean("General", "auto_update_check", fallback=True):
+            wx.CallLater(3000, self.check_for_updates, False)
 
         speak(self, "Basit Radyo'ya hoş geldiniz.")
         self.list_ctrl.SetFocus()
@@ -2139,6 +2180,7 @@ class MainFrame(wx.Frame):
             "MINIMIZE_TRAY": self.on_minimize_to_tray,
             "MANAGE_RECORDINGS": self.on_manage_recordings,
             "HELP_HTML": self.on_help_html,
+            "CHECK_UPDATES": self.on_check_updates,
         }
         for key, handler in menu_handlers.items():
             self.Bind(wx.EVT_MENU, handler, id=self.menu_ids[key])
@@ -2768,6 +2810,7 @@ class MainFrame(wx.Frame):
                 config["General"]["net_timeout_seconds"] = str(vals["net_timeout_seconds"])
                 config["General"]["search_source"] = str(vals["search_source"])
                 config["General"]["enable_logging"] = str(vals["enable_logging"])
+                config["General"]["auto_update_check"] = str(vals["auto_update_check"])
 
                 new_path_from_dialog = vals["record_path"]
                 default_path_at_moment = os.path.join(BASE_DIR, "kayıtlar")
@@ -3359,9 +3402,165 @@ class MainFrame(wx.Frame):
                 self.refresh_list_ctrl(self.current_list_name)
                 speak(self, "Favori listeleri güncellendi.")
 
+    def on_check_updates(self, event):
+        self.check_for_updates(manual=True)
+
+    def check_for_updates(self, manual=False):
+        if getattr(self, "is_checking_updates", False):
+            if manual:
+                speak_or_dialog(self, "Güncelleme denetimi zaten devam ediyor.", "Güncelleme", wx.ICON_INFORMATION)
+            return
+        self.is_checking_updates = True
+        if manual:
+            self.SetStatusText("Güncellemeler denetleniyor...")
+            speak(self, "Güncellemeler denetleniyor.")
+        threading.Thread(target=self._check_for_updates_thread, args=(manual,), daemon=True).start()
+
+    def _check_for_updates_thread(self, manual):
+        try:
+            response = requests.get(
+                GITHUB_LATEST_RELEASE_API,
+                headers={"Accept": "application/vnd.github+json", "User-Agent": f"Basit-Radyo/{APP_VERSION}"},
+                timeout=15,
+            )
+            if response.status_code == 404:
+                wx.CallAfter(self._finish_update_check, manual, None, "GitHub'da henüz yayınlanmış sürüm bulunamadı.")
+                return
+            response.raise_for_status()
+            release = response.json()
+            latest_version = release.get("tag_name") or release.get("name") or ""
+            if not is_newer_version(latest_version, APP_VERSION):
+                wx.CallAfter(self._finish_update_check, manual, None, None)
+                return
+
+            asset = self._find_update_asset(release)
+            release_info = {
+                "version": latest_version.lstrip("v"),
+                "tag": latest_version,
+                "url": release.get("html_url") or GITHUB_RELEASES_URL,
+                "notes": release.get("body") or "",
+                "asset_name": asset.get("name") if asset else "",
+                "asset_url": asset.get("browser_download_url") if asset else "",
+            }
+            wx.CallAfter(self._finish_update_check, manual, release_info, None)
+        except Exception as exc:
+            logging.error(f"Güncelleme denetimi hatası: {exc}")
+            wx.CallAfter(self._finish_update_check, manual, None, str(exc))
+
+    def _find_update_asset(self, release):
+        assets = release.get("assets") or []
+        for asset in assets:
+            name = (asset.get("name") or "").lower()
+            if name == "basit_radyo.exe":
+                return asset
+        for asset in assets:
+            name = (asset.get("name") or "").lower()
+            if name.endswith(".exe"):
+                return asset
+        return None
+
+    def _finish_update_check(self, manual, release_info, error):
+        self.is_checking_updates = False
+        if manual:
+            self.SetStatusText("Boşta")
+
+        if error:
+            if manual:
+                speak_or_dialog(self, f"Güncelleme denetlenemedi.\n{error}", "Güncelleme Hatası", wx.ICON_WARNING)
+            return
+
+        if not release_info:
+            if manual:
+                speak_or_dialog(self, f"Basit Radyo zaten güncel. Mevcut sürüm: {APP_VERSION}", "Güncelleme", wx.ICON_INFORMATION)
+            return
+
+        msg = (
+            f"Yeni Basit Radyo sürümü bulundu.\n\n"
+            f"Mevcut sürüm: {APP_VERSION}\n"
+            f"Yeni sürüm: {release_info['version']}\n\n"
+        )
+        if release_info.get("asset_url"):
+            msg += "İndirip kurmak ister misiniz?"
+        else:
+            msg += "Bu sürüm için indirilebilir exe dosyası bulunamadı. GitHub sayfası açılsın mı?"
+
+        with wx.MessageDialog(self, msg, "Güncelleme Bulundu", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_INFORMATION) as dlg:
+            if dlg.ShowModal() != wx.ID_YES:
+                return
+
+        if release_info.get("asset_url"):
+            self.download_and_install_update(release_info)
+        else:
+            webbrowser.open(release_info.get("url") or GITHUB_RELEASES_URL)
+
+    def download_and_install_update(self, release_info):
+        if not getattr(sys, "frozen", False):
+            speak_or_dialog(
+                self,
+                "Güncelleme kurulumu yalnızca paketlenmiş exe sürümünde yapılabilir. GitHub sayfası açılıyor.",
+                "Güncelleme",
+                wx.ICON_INFORMATION,
+            )
+            webbrowser.open(release_info.get("url") or GITHUB_RELEASES_URL)
+            return
+
+        self.SetStatusText("Güncelleme indiriliyor...")
+        speak(self, "Güncelleme indiriliyor.")
+        threading.Thread(target=self._download_update_thread, args=(release_info,), daemon=True).start()
+
+    def _download_update_thread(self, release_info):
+        try:
+            target_path = sys.executable
+            download_path = os.path.join(BASE_DIR, "Basit_Radyo_update.exe")
+            with requests.get(release_info["asset_url"], stream=True, timeout=60) as response:
+                response.raise_for_status()
+                with open(download_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+            wx.CallAfter(self._launch_updater, download_path, target_path)
+        except Exception as exc:
+            logging.error(f"Güncelleme indirme hatası: {exc}")
+            wx.CallAfter(self.SetStatusText, "Boşta")
+            wx.CallAfter(
+                speak_or_dialog,
+                self,
+                f"Güncelleme indirilemedi.\n{exc}",
+                "Güncelleme Hatası",
+                wx.ICON_ERROR,
+            )
+
+    def _launch_updater(self, download_path, target_path):
+        updater_path = os.path.join(BASE_DIR, "Basit_Radyo_updater.bat")
+        app_dir = BASE_DIR
+        exe_name = os.path.basename(target_path)
+        bat = f"""@echo off
+chcp 65001 >nul
+timeout /t 2 /nobreak >nul
+:waitloop
+tasklist /FI "IMAGENAME eq {exe_name}" | find /I "{exe_name}" >nul
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto waitloop
+)
+copy /Y "{download_path}" "{target_path}" >nul
+del "{download_path}" >nul 2>nul
+start "" /D "{app_dir}" "{target_path}"
+del "%~f0"
+"""
+        try:
+            with open(updater_path, "w", encoding="utf-8") as f:
+                f.write(bat)
+            speak(self, "Güncelleme kurulumu için program yeniden başlatılıyor.")
+            subprocess.Popen(["cmd", "/c", updater_path], cwd=BASE_DIR, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.Close()
+        except Exception as exc:
+            logging.error(f"Güncelleyici başlatma hatası: {exc}")
+            speak_or_dialog(self, f"Güncelleyici başlatılamadı.\n{exc}", "Güncelleme Hatası", wx.ICON_ERROR)
+
     def on_about(self, event):
         about_text = (
-            "Basit Radyo v6.4\n\n"
+            f"Basit Radyo v{APP_VERSION}\n\n"
             "Basit Radyo, internet üzerinden canlı radyo yayınlarını dinlemenizi, "
             "kaydetmenizi ve favori listeleri oluşturmanızı sağlayan sade, "
             "erişilebilir ve işlevsel bir uygulamadır.\n\n"
