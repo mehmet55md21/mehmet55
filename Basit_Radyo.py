@@ -66,7 +66,7 @@ BASS_CONFIG_NET_AGENT = 16
 
 API_BASE_URL = "http://all.api.radio-browser.info/json/stations"
 CONTACT_EMAIL = "mehmet55.md1980@gmail.com"
-APP_VERSION = "6.6"
+APP_VERSION = "6.7"
 GITHUB_REPO = "mehmet55md21/mehmet55"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
@@ -433,7 +433,7 @@ class StreamSelectionDialog(wx.Dialog):
         if wx.TheClipboard.Open():
             wx.TheClipboard.SetData(wx.TextDataObject(url))
             wx.TheClipboard.Close()
-            speak(self.main_frame, "AkÄ±ÅŸ adresi kopyalandÄ±.")
+            speak(self.main_frame, "Akış adresi kopyalandı.")
         
     def on_key(self, event):
         key = event.GetKeyCode()
@@ -1405,7 +1405,7 @@ class WebSearchDialog(wx.Dialog):
             with urllib.request.urlopen(req, timeout=15) as response:
                 detail_html = response.read().decode("utf-8", errors="ignore")
         except Exception as exc:
-            logging.debug(f"FMStream detay sayfasÄ± okunamadÄ±: {detail_url} - {exc}")
+            logging.debug(f"FMStream detay sayfası okunamadı: {detail_url} - {exc}")
             return None
 
         streams = []
