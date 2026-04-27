@@ -425,10 +425,21 @@ class StreamSelectionDialog(wx.Dialog):
 
     def on_dclick(self, event):
         self.cleanup_and_close(wx.ID_OK)
+
+    def copy_selected_stream_url(self):
+        url = self.get_selected_url()
+        if not url:
+            return
+        if wx.TheClipboard.Open():
+            wx.TheClipboard.SetData(wx.TextDataObject(url))
+            wx.TheClipboard.Close()
+            speak(self.main_frame, "AkÄ±ÅŸ adresi kopyalandÄ±.")
         
     def on_key(self, event):
         key = event.GetKeyCode()
-        if key == wx.WXK_ESCAPE:
+        if event.ControlDown() and not event.ShiftDown() and not event.AltDown() and key == ord("C"):
+            self.copy_selected_stream_url()
+        elif key == wx.WXK_ESCAPE:
             self.cleanup_and_close(wx.ID_CANCEL)
         elif key == wx.WXK_SPACE:
             self.toggle_preview()
