@@ -66,7 +66,7 @@ BASS_CONFIG_NET_AGENT = 16
 
 API_BASE_URL = "http://all.api.radio-browser.info/json/stations"
 CONTACT_EMAIL = "mehmet55.md1980@gmail.com"
-APP_VERSION = "6.5"
+APP_VERSION = "6.6"
 GITHUB_REPO = "mehmet55md21/mehmet55"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
